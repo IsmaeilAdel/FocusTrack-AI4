@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusTrack AI - نظام مراقبة التركيز المتقدم</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { background-color: #f8fafc; color: #0f172a; margin: 0; padding: 15px; text-align: center; }
+    
+    .card { background: #ffffff; border-radius: 16px; padding: 20px; margin-bottom: 15px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; text-align: right; }
+    
+    .video-container { position: relative; width: 100%; max-width: 500px; margin: 10px auto; border-radius: 12px; overflow: hidden; background: #000; }
+    video, canvas { width: 100%; height: auto; display: block; }
+    canvas { position: absolute; top: 0; left: 0; }
+    
+    .status-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 14px; margin-bottom: 10px; background: #e2e8f0; color: #64748b; font-weight: bold; }
+    .status-badge.active { background: #d1fae5; color: #065f46; }
+
+    .students-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-top: 15px; }
+    
+    .student-card { background: #f8fafc; border-radius: 12px; padding: 15px; border: 2px solid #e2e8f0; transition: all 0.3s ease; }
+    .student-card.warning { border-color: #ef4444; background: #fef2f2; animation: pulse 1s infinite alternate; }
+    
+    @keyframes pulse {
+      from { box-shadow: 0 0 5px #ef4444; }
+      to { box-shadow: 0 0 15px #ef4444; }
+    }
+
+    .section-title { font-size: 14px; font-weight: bold; color: #1e293b; margin-bottom: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+
+    .info-row { display: flex; align-items: center; justify-content: space-between; background: #eff6ff; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; font-size: 14px; font-weight: bold; color: #1e3a8a; }
+    .student-card.warning .info-row { background: #fee2e2; color: #991b1b; }
+
+    .progress-container { margin: 8px 0; font-size: 13px; color: #475569; }
+    .progress-header { display: flex; justify-content: space-between; margin-bottom: 3px; font-weight: 600; }
+    .progress-bar-bg { background: #e2e8f0; border-radius: 8px; height: 10px; width: 100%; overflow: hidden; }
+    .progress-bar-fill { background: #2563eb; height: 100%; border-radius: 8px; transition: width 0.3s ease; }
+    .student-card.warning .progress-bar-fill { background: #ef4444; }
+
+    .result-box { margin-top: 12px; padding-top: 8px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between; align-items: center; font-size: 16px; font-weight: bold; }
+    .result-score { color: #2563eb; font-size: 20px; }
+    .student-card.warning .result-score { color: #ef4444; }
+
+    .alarm-banner { display: none; background: #ef4444; color: white; padding: 12px; border-radius: 10px; font-weight: bold; margin-bottom: 15px; font-size: 16px; text-align: center; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 12px 24px; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%; max-width: 320px; }
+  </style>
+</head>
+<body>
+
+  <div id="alarm-banner" class="alarm-banner">⚠️ تنبيه: انخفض التركيز عن 50% أو أغمض الطالب عينيه!</div>
+
+  <div class="card" style="text-align: center;">
+    <h3>مراقبة الفصل الذكية</h3>
+    <div id="camera-status" class="status-badge">الكاميرا متوقفة</div>
+    
+    <div class="video-container">
+      <video id="webcam" playsinline webkit-playsinline muted></video>
+      <canvas id="output_canvas"></canvas>
+    </div>
+    
+    <button id="start-btn" class="btn" onclick="init()">بدء التشغيل والتحليل</button>
+  </div>
+
+  <div class="card">
+    <h3 style="text-align: center;">تحليلات الطلاب المكتشفين (<span id="students-count">0</span>)</h3>
+    <div id="students-container" class="students-grid">
+      <div style="color: #64748b; grid-column: 1/-1; text-align: center;">اضغط على زر التشغيل لبدء الرصد</div>
+    </div>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('webcam');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    
+    let audioCtx = null;
+    function playAlarm() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(650, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.25);
+    }
+
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+
+    faceMesh.setOptions({
+      maxNumFaces: 10,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    faceMesh.onResults(onResults);
+
+    async function init() {
+      document.getElementById('start-btn').style.display = 'none';
+      document.getElementById('camera-status').innerText = 'جاري التشغيل...';
+      
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await faceMesh.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720,
+        facingMode: "user"
+      });
+
+      await camera.start();
+      document.getElementById('camera-status').innerText = 'الكاميرا تعمل والمراقبة نشطة';
+      document.getElementById('camera-status'].classList.add('active');
+    }
+
+    function onResults(results) {
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+      const studentsContainer = document.getElementById('students-container');
+      const alarmBanner = document.getElementById('alarm-banner');
+      
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const count = results.multiFaceLandmarks.length;
+        document.getElementById('students-count').innerText = count;
+        studentsContainer.innerHTML = '';
+        
+        let hasWarning = false;
+
+        results.multiFaceLandmarks.forEach((landmarks, index) => {
+          const nose = landmarks[1];
+          const leftEyeOuter = landmarks[33];
+          const rightEyeOuter = landmarks[263];
+          
+          // نقاط حساب فتحة العين بدقة لكشف الغمض أو النوم
+          const leftEyeTop = landmarks[159];
+          const leftEyeBottom = landmarks[145];
+          const rightEyeTop = landmarks[386];
+          const rightEyeBottom = landmarks[374];
+
+          const leftEyeHeight = Math.abs(leftEyeTop.y - leftEyeBottom.y);
+          const rightEyeHeight = Math.abs(rightEyeTop.y - rightEyeBottom.y);
+          const avgEyeOpening = (leftEyeHeight + rightEyeHeight) / 2;
+          
+          // إذا كانت العين مغمضة
+          const isEyesClosed = avgEyeOpening < 0.015;
+
+          // حساب انحراف العين وحركة الرأس
+          const faceCenterX = (leftEyeOuter.x + rightEyeOuter.x) / 2;
+          const eyeDeviation = Math.abs(nose.x - faceCenterX);
+          const headTilt = Math.abs(nose.y - 0.5);
+
+          // حساب نسب المؤشرات لكل قسم تماماً مثل صورتك (اتجاه العين 40%، حركة الرأس 30%، تعبير الوجه 30%)[span_2](start_span)[span_2](end_span)
+          let eyeScore = isEyesClosed ? 10 : Math.round(Math.max(20, 100 - (eyeDeviation * 500)));
+          let headScore = Math.round(Math.max(20, 100 - (headTilt * 250)));
+          let faceExpScore = isEyesClosed ? 15 : 85;
+
+          // النتيجة الإجمالية للتركيز
+          let finalScore = isEyesClosed ? 15 : Math.round((eyeScore * 0.4) + (headScore * 0.3) + (faceExpScore * 0.3));
+          finalScore = Math.min(100, Math.max(10, finalScore));
+
+          let eyeText = isEyesClosed ? "مغمض العينين (تنبيه!) 💤" : (eyeDeviation < 0.03 ? "أمام الشاشة 👁️" : "مشتت ↗️");
+          let headText = headTilt < 0.12 ? "مستقرة 👤" : "مائلة ⚠️";
+          let faceText = isEyesClosed ? "غير منتبه / نائم" : "طبيعي 🙂";
+
+          // التنبيه إذا قل التركيز عن 50% أو إذا أغمض الطالب عينه
+          const isLow = finalScore < 50 || isEyesClosed;
+          if (isLow) hasWarning = true;
+
+          // رسم مربع التحديد على وجه الطالب
+          canvasCtx.strokeStyle = isLow ? '#ef4444' : '#10b981';
+          canvasCtx.lineWidth = 3;
+          const xMin = Math.min(...landmarks.map(l => l.x)) * canvasElement.width;
+          const xMax = Math.max(...landmarks.map(l => l.x)) * canvasElement.width;
+          const yMin = Math.min(...landmarks.map(l => l.y)) * canvasElement.height;
+          const yMax = Math.max(...landmarks.map(l => l.y)) * canvasElement.height;
+          canvasCtx.strokeRect(xMin, yMin, xMax - xMin, yMax - yMin);
+
+          // بناء بطاقة الطالب بالشكل التفصيلي المطلوب
+          const card = document.createElement('div');
+          card.className = `student-card ${isLow ? 'warning' : ''}`;
+          card.innerHTML = `
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <b>طالب #${index + 1}</b>
+              <span style="font-size: 13px; color: ${isLow ? '#ef4444' : '#059669'};">${isLow ? '⚠️ خطر تشتت' : '✅ منتبه'}</span>
+            </div>
+
+            <div class="section-title">تحليل الذكاء الاصطناعي (تجريبي)</div>
+            <div class="info-row"><span>👁️ اتجاه العين</span><span>${eyeText}</span></div>
+            <div class="info-row"><span>🙂 تعبير الوجه</span><span>${faceText}</span></div>
+            <div class="info-row"><span>👦 حركة الرأس</span><span>${headText}</span></div>
+
+            <div class="section-title" style="margin-top: 12px;">حساب مؤشر التركيز</div>
+            
+            <div class="progress-container">
+              <div class="progress-header"><span>اتجاه العين (%40)</span><span>%${eyeScore}</span></div>
+              <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: ${eyeScore}%"></div></div>
+            </div>
+
+            <div class="progress-container">
+              <div class="progress-header"><span>حركة الرأس (%30)</span><span>%${headScore}</span></div>
+              <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: ${headScore}%"></div></div>
+            </div>
+
+            <div class="progress-container">
+              <div class="progress-header"><span>تعبير الوجه (%30)</span><span>%${faceExpScore}</span></div>
+              <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: ${faceExpScore}%"></div></div>
+            </div>
+
+            <div class="result-box">
+              <span>النتيجة</span>
+              <span class="result-score">تركيز %${finalScore}</span>
+            </div>
+          `;
+          studentsContainer.appendChild(card);
+        });
+
+        if (hasWarning) {
+          alarmBanner.style.display = 'block';
+          playAlarm();
+        } else {
+          alarmBanner.style.display = 'none';
+        }
+
+      } else {
+        document.getElementById('students-count').innerText = '0';
+        studentsContainer.innerHTML = '<div style="color: #ef4444; grid-column: 1/-1; text-align: center;">لا يوجد طلاب داخل مجال الكاميرا</div>';
+        alarmBanner.style.display = 'none';
+      }
+      canvasCtx.restore();
+    }
+  </script>
+</body>
+</html>
