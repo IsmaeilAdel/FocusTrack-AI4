@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FocusTrack Pro - نظام مراقبة التركيز الذكي</title>
+    <!-- Tailwind CSS للتصميم العصري -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome للأيقونات -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- MediaPipe Face Mesh & Camera Utils للتتبع السريع -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+    <!-- شريط التنقل العلوي -->
+    <header class="bg-slate-800 border-b border-slate-700 shadow-lg px-6 py-4 flex justify-between items-center">
+        <div class="flex items-center space-x-3 space-x-reverse">
+            <div class="bg-indigo-600 p-2 rounded-xl text-white shadow-md shadow-indigo-500/20">
+                <i class="fa-solid fa-eye text-xl"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold tracking-wide">FocusTrack <span class="text-indigo-400 text-sm bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20">Pro المطور</span></h1>
+                <p class="text-xs text-slate-400">نظام ذكي متعدد الطلاب لتتبع التركيز والانتباه</p>
+            </div>
+        </div>
+        <div class="flex items-center space-x-4 space-x-reverse">
+            <div id="system-status" class="flex items-center space-x-2 space-x-reverse bg-amber-500/10 border border-amber-500/20 text-amber-400 px-3 py-1.5 rounded-full text-xs font-medium">
+                <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                <span>النظام في وضع الاستعداد</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- المحتوى الرئيسي -->
+    <main class="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- قسم عرض الكاميرا (يمتد لعمودين) -->
+        <div class="lg:col-span-2 flex flex-col space-y-4">
+            <div class="relative bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl aspect-video flex items-center justify-center">
+                <!-- عنصر الفيديو (مخفي، يتم الرسم منه وإليه عبر الـ Canvas) -->
+                <video id="webcam" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100 opacity-0" autoplay playsinline></video>
+                <!-- لوحة الرسم للذكاء الاصطناعي -->
+                <canvas id="output_canvas" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100"></canvas>
+                
+                <!-- واجهة ترحيبية قبل التشغيل -->
+                <div id="welcome-overlay" class="absolute inset-0 bg-slate-900/90 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 z-10">
+                    <div class="w-20 h-20 bg-indigo-600/20 border border-indigo-500/30 rounded-full flex items-center justify-center text-indigo-400 mb-4 text-3xl shadow-inner">
+                        <i class="fa-solid fa-video"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold mb-2">ابدأ جلسة المراقبة الذكية</h2>
+                    <p class="text-slate-400 max-w-md text-sm mb-6">النظام يتيح فتحة العين الطبيعية بالكامل، ولا يفعل إنذار النوم إلا عند إغلاق العين الحقيقي لأكثر من 5 ثوانٍ.</p>
+                    <button id="start-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-8 py-3 rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center space-x-2 space-x-reverse">
+                        <i class="fa-solid fa-play"></i>
+                        <span>تشغيل الكاميرا وبدء التتبع</span>
+                    </button>
+                </div>
+
+                <!-- شارة عدد الطلاب المكتشفين المباشرة -->
+                <div class="absolute top-4 right-4 bg-slate-900/80 backdrop-blur-md border border-slate-700/50 px-3 py-1.5 rounded-xl text-xs font-medium flex items-center space-x-2 space-x-reverse z-20">
+                    <i class="fa-solid fa-users text-indigo-400"></i>
+                    <span>الطلاب المرصودون: <strong id="students-count" class="text-white">0</strong></span>
+                </div>
+            </div>
+
+            <!-- لوحة التحكم السريعة أسفل الكاميرا -->
+            <div class="bg-slate-800/50 border border-slate-700/50 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-center space-x-3 space-x-reverse">
+                    <button id="toggle-sound" class="bg-slate-700 hover:bg-slate-600 p-2.5 rounded-xl text-slate-200 transition-colors flex items-center space-x-2 space-x-reverse text-xs font-medium">
+                        <i class="fa-solid fa-volume-high text-indigo-400" id="sound-icon"></i>
+                        <span id="sound-text">التنبيه الصوتي: مفعل (عالي)</span>
+                    </button>
+                </div>
+                <div class="text-xs text-slate-400 flex items-center space-x-1 space-x-reverse">
+                    <i class="fa-solid fa-circle-info text-indigo-400"></i>
+                    <span>إنذار صوتي عالي النبرة في حال انخفاض التركيز أو النوم.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- قسم لوحة المؤشرات والتحليلات -->
+        <div class="flex flex-col space-y-4">
+            
+            <!-- بطاقة المؤشر العام -->
+            <div class="bg-slate-800 border border-slate-700/70 rounded-2xl p-5 shadow-xl">
+                <h3 class="text-sm font-semibold text-slate-300 mb-4 flex items-center justify-between">
+                    <span>معدل التركيز العام</span>
+                    <i class="fa-solid fa-chart-line text-indigo-400"></i>
+                </h3>
+                <div class="flex items-center justify-center py-4">
+                    <div class="relative w-36 h-36 flex items-center justify-center">
+                        <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                            <path class="text-slate-700" stroke-width="3.5" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                            <path id="progress-circle" class="text-indigo-500 transition-all duration-300" stroke-dasharray="0, 100" stroke-width="3.5" stroke-linecap="round" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        </svg>
+                        <div class="absolute flex flex-col items-center justify-center text-center">
+                            <span id="global-focus-val" class="text-3xl font-ext500 font-bold">0%</span>
+                            <span class="text-[10px] text-slate-400">متوسط التركيز</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="global-alert-box" class="mt-2 p-3 rounded-xl bg-slate-900/50 border border-slate-700/50 text-center text-xs font-medium text-slate-300 transition-all">
+                    في انتظار رصد الوجوه...
+                </div>
+            </div>
+
+            <!-- بطاقة سجل وتنبيهات الطلاب -->
+            <div class="bg-slate-800 border border-slate-700/70 rounded-2xl p-5 shadow-xl flex-1 flex flex-col">
+                <h3 class="text-sm font-semibold text-slate-300 mb-3 flex items-center justify-between">
+                    <span>حالة الطلاب المباشرة</span>
+                    <span class="text-xs bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-500/20" id="active-faces-badge">0 وجوه</span>
+                </h3>
+                <div id="students-list-container" class="space-y-2.5 overflow-y-auto max-h-[250px] pr-1 text-xs custom-scrollbar">
+                    <div class="text-center text-slate-500 py-8">
+                        لا يوجد طلاب في نطاق الرؤية حالياً
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- البرمجة والمنطق المنفذ للتطبيق -->
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const startBtn = document.getElementById('start-btn');
+        const welcomeOverlay = document.getElementById('welcome-overlay');
+        const systemStatus = document.getElementById('system-status');
+        const studentsCountEl = document.getElementById('students-count');
+        const globalFocusVal = document.getElementById('global-focus-val');
+        const progressCircle = document.getElementById('progress-circle');
+        const globalAlertBox = document.getElementById('global-alert-box');
+        const studentsListContainer = document.getElementById('students-list-container');
+        const toggleSoundBtn = document.getElementById('toggle-sound');
+        const soundIcon = document.getElementById('sound-icon');
+        const soundText = document.getElementById('sound-text');
+
+        let soundEnabled = true;
+        let isRunning = false;
+        let audioCtx = null;
+        let studentsState = {};
+
+        toggleSoundBtn.addEventListener('click', () => {
+            soundEnabled = !soundEnabled;
+            if (soundEnabled) {
+                soundIcon.className = "fa-solid fa-volume-high text-indigo-400";
+                soundText.innerText = "التنبيه الصوتي: مفعل (عالي)";
+            } else {
+                soundIcon.className = "fa-solid fa-volume-xmark text-slate-400";
+                soundText.innerText = "التنبيه الصوتي: معطل";
+            }
+        });
+
+        // صوت إنذار عالي النبرة ومرتفع الصوت
+        function playWarningSound() {
+            if (!soundEnabled) return;
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.type = 'sawtooth'; // نبرة حادة وواضحة للإنذار
+                osc.frequency.setValueAtTime(880, audioCtx.currentTime); // تردد أعلى
+                
+                // رفع مستوى الصوت (Gain عالي وواضح)
+                gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.25);
+            } catch (e) {
+                console.error("Audio error:", e);
+            }
+        }
+
+        function calculateEAR(landmarks, leftIndices, rightIndices) {
+            function getDist(p1, p2) {
+                return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+            }
+            const lVertical = (getDist(landmarks[leftIndices[1]], landmarks[leftIndices[5]]) + getDist(landmarks[leftIndices[2]], landmarks[leftIndices[4]])) / 2;
+            const lHorizontal = getDist(landmarks[leftIndices[0]], landmarks[leftIndices[3]]);
+            const leftEar = lVertical / lHorizontal;
+
+            const rVertical = (getDist(landmarks[rightIndices[1]], landmarks[rightIndices[5]]) + getDist(landmarks[rightIndices[2]], landmarks[rightIndices[4]])) / 2;
+            const rHorizontal = getDist(landmarks[rightIndices[0]], landmarks[rightIndices[3]]);
+            const rightEar = rVertical / rHorizontal;
+
+            return (leftEar + rightEar) / 2;
+        }
+
+        const leftEyeIndices = [33, 160, 158, 133, 153, 144];
+        const rightEyeIndices = [362, 385, 387, 263, 373, 380];
+
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 5,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onResults);
+
+        function onResults(results) {
+            if (!isRunning) return;
+
+            canvasElement.width = videoElement.videoWidth || 640;
+            canvasElement.height = videoElement.videoHeight || 480;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            const currentTime = Date.now();
+            const faces = results.multiFaceLandmarks || [];
+            let totalFocusSum = 0;
+            let generalAlertTriggered = false;
+            let alertMessages = [];
+
+            studentsCountEl.innerText = faces.length;
+            document.getElementById('active-faces-badge').innerText = `${faces.length} وجوه`;
+
+            if (faces.length === 0) {
+                globalFocusVal.innerText = "0%";
+                progressCircle.setAttribute("stroke-dasharray", "0, 100");
+                globalAlertBox.innerHTML = `<span class="text-amber-400"><i class="fa-solid fa-triangle-exclamation ml-1"></i> لا يوجد طلاب أمام الكاميرا حالياً</span>`;
+                globalAlertBox.className = "mt-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-center text-xs font-medium text-amber-300";
+                studentsListContainer.innerHTML = `<div class="text-center text-slate-500 py-8">في انتظار ظهور الطلاب...</div>`;
+                canvasCtx.restore();
+                return;
+            }
+
+            faces.forEach((landmarks, index) => {
+                const studentId = index + 1;
+
+                if (!studentsState[studentId]) {
+                    studentsState[studentId] = {
+                        closedEyesStartTime: null,
+                        isEyesClosedAlarmActive: false,
+                        focusPercentage: 100
+                    };
+                }
+
+                let state = studentsState[studentId];
+                const ear = calculateEAR(landmarks, leftEyeIndices, rightEyeIndices);
+                
+                const noseTip = landmarks[1];
+                const leftCheek = landmarks[234];
+                const rightCheek = landmarks[454];
+                const headDeviation = Math.abs((leftCheek.x - noseTip.x) - (noseTip.x - rightCheek.x));
+                
+                // تم تصحيح العتبة لتتوافق مع الفتحة الطبيعية للعين (أقل من 0.13 يعتبر إغلاق تام للنوم)
+                const isEyesClosed = ear < 0.13;
+
+                if (isEyesClosed) {
+                    if (!state.closedEyesStartTime) {
+                        state.closedEyesStartTime = currentTime;
+                    }
+                    // شرط 3: لو الطالب مغمض عينيه تماماً لأكثر من 5 ثوانٍ
+                    if (currentTime - state.closedEyesStartTime > 5000) {
+                        state.isEyesClosedAlarmActive = true;
+                        generalAlertTriggered = true;
+                        alertMessages.push(`الطالب #${studentId}: مغمض العينين (نائم) لأكثر من 5 ثوانٍ!`);
+                    } else {
+                        state.isEyesClosedAlarmActive = false;
+                    }
+                } else {
+                    state.closedEyesStartTime = null;
+                    state.isEyesClosedAlarmActive = false;
+                }
+
+                let focusScore = 100 - Math.min(100, Math.floor(headDeviation * 300));
+                if (isEyesClosed && state.closedEyesStartTime && (currentTime - state.closedEyesStartTime > 2000)) {
+                    focusScore = Math.max(10, focusScore - 40);
+                }
+                state.focusPercentage = Math.max(0, Math.min(100, focusScore));
+
+                totalFocusSum += state.focusPercentage;
+
+                // شرط 2: لو التركيز قل عن 50%
+                let isLowFocus = state.focusPercentage < 50;
+                if (isLowFocus) {
+                    generalAlertTriggered = true;
+                    alertMessages.push(`الطالب #${studentId}: نسبة التركيز منخفضة (${state.focusPercentage}%)!`);
+                }
+
+                let minX = 1, minY = 1, maxX = 0, maxY = 0;
+                landmarks.forEach(pt => {
+                    if (pt.x < minX) minX = pt.x;
+                    if (pt.y < minY) minY = pt.y;
+                    if (pt.x > maxX) maxX = pt.x;
+                    if (pt.y > maxY) maxY = pt.y;
+                });
+
+                const boxX = minX * canvasElement.width;
+                const boxY = minY * canvasElement.height;
+                const boxW = (maxX - minX) * canvasElement.width;
+                const boxH = (maxY - minY) * canvasElement.height;
+
+                const hasAlert = isLowFocus || state.isEyesClosedAlarmActive;
+                const boxColor = hasAlert ? '#ef4444' : '#10b981';
+
+                canvasCtx.strokeStyle = boxColor;
+                canvasCtx.lineWidth = 3;
+                canvasCtx.strokeRect(boxX, boxY, boxW, boxH);
+
+                canvasCtx.fillStyle = boxColor;
+                canvasCtx.fillRect(boxX, boxY - 28, boxW, 28);
+                canvasCtx.fillStyle = '#ffffff';
+                canvasCtx.font = 'bold 12px sans-serif';
+                canvasCtx.fillText(`طالب #${studentId} | ${state.focusPercentage}%`, boxX + 8, boxY - 9);
+            });
+
+            const globalAvgFocus = Math.round(totalFocusSum / faces.length);
+            globalFocusVal.innerText = `${globalAvgFocus}%`;
+            progressCircle.setAttribute("stroke-dasharray", `${globalAvgFocus}, 100`);
+
+            let listHTML = '';
+            faces.forEach((_, index) => {
+                const sId = index + 1;
+                const st = studentsState[sId];
+                const alertActive = st.focusPercentage < 50 || st.isEyesClosedAlarmActive;
+                
+                listHTML += `
+                    <div class="bg-slate-900/60 border ${alertActive ? 'border-red-500/50 bg-red-500/5' : 'border-slate-700/50'} p-3 rounded-xl flex items-center justify-between">
+                        <div class="flex items-center space-x-2 space-x-reverse">
+                            <div class="w-8 h-8 rounded-lg ${alertActive ? 'bg-red-500/20 text-red-400' : 'bg-indigo-500/20 text-indigo-400'} flex items-center justify-center font-bold">
+                                ${sId}
+                            </div>
+                            <div>
+                                <h4 class="font-semibold text-slate-200">الطالب رقم ${sId}</h4>
+                                <p class="text-[10px] ${alertActive ? 'text-red-400 font-medium' : 'text-slate-400'}">
+                                    ${st.isEyesClosedAlarmActive ? '⚠️ مغمض العينين (>5ث)' : (st.focusPercentage < 50 ? '⚠️ تركيز ضعيف (<50%)' : '✅ منتبه وفي التركيز')}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="text-left">
+                            <span class="text-sm font-bold ${alertActive ? 'text-red-400' : 'text-emerald-400'}">${st.focusPercentage}%</span>
+                        </div>
+                    </div>
+                `;
+            });
+            studentsListContainer.innerHTML = listHTML;
+
+            if (generalAlertTriggered) {
+                globalAlertBox.innerHTML = `<span class="text-red-400"><i class="fa-solid fa-triangle-exclamation ml-1"></i> ${alertMessages[0]}</span>`;
+                globalAlertBox.className = "mt-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-center text-xs font-medium text-red-300 animate-pulse";
+                systemStatus.className = "flex items-center space-x-2 space-x-reverse bg-red-500/10 border border-red-500/20 text-red-400 px-3 py-1.5 rounded-full text-xs font-medium";
+                systemStatus.innerHTML = `<span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span><span>تنبيه: خطر تشتت أو نوم!</span>`;
+                
+                playWarningSound();
+            } else {
+                globalAlertBox.innerHTML = `<span class="text-emerald-400"><i class="fa-solid fa-circle-check ml-1"></i> جميع الطلاب في حالة تركيز جيدة ومستقرة</span>`;
+                globalAlertBox.className = "mt-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center text-xs font-medium text-emerald-300";
+                systemStatus.className = "flex items-center space-x-2 space-x-reverse bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1.5 rounded-full text-xs font-medium";
+                systemStatus.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>النظام يعمل بانتظام</span>`;
+            }
+
+            canvasCtx.restore();
+        }
+
+        startBtn.addEventListener('click', async () => {
+            try {
+                startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>جاري تفعيل الكاميرا...</span>`;
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 1280, height: 720, facingMode: "user" } 
+                });
+                videoElement.srcObject = stream;
+                await videoElement.play();
+
+                welcomeOverlay.classList.add('hidden');
+                isRunning = true;
+
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        if (isRunning) {
+                            await faceMesh.send({ image: videoElement });
+                        }
+                    },
+                    width: 1280,
+                    height: 720
+                });
+                camera.start();
+
+            } catch (err) {
+                console.error("Camera access error:", err);
+                alert("تعذر الوصول للكاميرا. تأكد من منح الأذونات اللازمة للمتصفح.");
+                startBtn.innerHTML = `<i class="fa-solid fa-play"></i><span>تشغيل الكاميرا وبدء التتبع</span>`;
+            }
+        });
+    </script>
+</body>
+</html>
